@@ -1,4 +1,6 @@
 #include "ReagentBankAccount.h"
+#include <algorithm>
+#include <cctype>
 #include <unordered_map>
 
 uint32 g_maxOptionsPerPage;
@@ -100,9 +102,8 @@ private:
     return iconStr;
   }
 
-  // Returns a colored item link string for display in gossip menus (no cache,
-  // as it may be locale-dependent)
-  std::string GetItemLink(uint32 entry, WorldSession *session) const
+  // Gets the localized item name for display and comparisons
+  std::string GetItemName(uint32 entry, WorldSession *session) const
   {
     int loc_idx = session->GetSessionDbLocaleIndex();
     const ItemTemplate *temp = GetCachedItemTemplate(entry);
@@ -112,6 +113,15 @@ private:
       if (ItemLocale const *il = sObjectMgr->GetItemLocale(temp->ItemId))
         ObjectMgr::GetLocaleString(il->Name, loc_idx, name);
     }
+    return name;
+  }
+
+  // Returns a colored item link string for display in gossip menus (no cache,
+  // as it may be locale-dependent)
+  std::string GetItemLink(uint32 entry, WorldSession *session) const
+  {
+    const ItemTemplate *temp = GetCachedItemTemplate(entry);
+    std::string name = GetItemName(entry, session);
     std::ostringstream oss;
     oss << "|c";
     if (temp)
@@ -856,7 +866,7 @@ public:
     WorldSession *session = player->GetSession();
     uint32 accountKey, guidKey;
     GetStorageKeys(player, accountKey, guidKey);
-    std::string query = "SELECT item_entry, amount FROM mod_reagent_bank_account WHERE account_id = " + std::to_string(accountKey) + " AND guid = " + std::to_string(guidKey) + " AND item_subclass = " + std::to_string(item_subclass) + " ORDER BY item_entry DESC";
+    std::string query = "SELECT item_entry, amount FROM mod_reagent_bank_account WHERE account_id = " + std::to_string(accountKey) + " AND guid = " + std::to_string(guidKey) + " AND item_subclass = " + std::to_string(item_subclass);
     session->GetQueryProcessor().AddCallback(CharacterDatabase.AsyncQuery(query).WithCallback([=, this](QueryResult result)
                                                                                               {
       // Build arrays first
@@ -872,6 +882,21 @@ public:
           totalAmount += itemAmount;
         } while (result->NextRow());
       }
+
+      auto getSortKey = [this, session](uint32 entry) {
+        std::string name = GetItemName(entry, session);
+        std::transform(name.begin(), name.end(), name.begin(),
+                       [](unsigned char c) { return std::tolower(c); });
+        return name;
+      };
+      std::sort(itemEntries.begin(), itemEntries.end(),
+                [getSortKey](uint32 lhs, uint32 rhs) {
+                  std::string lhsKey = getSortKey(lhs);
+                  std::string rhsKey = getSortKey(rhs);
+                  if (lhsKey == rhsKey)
+                    return lhs < rhs;
+                  return lhsKey < rhsKey;
+                });
 
       uint32 totalItems = itemEntries.size();
       uint32 totalPages = (totalItems == 0) ? 1 : ((totalItems - 1) / g_maxOptionsPerPage) + 1;
